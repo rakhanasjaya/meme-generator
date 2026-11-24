@@ -163,7 +163,15 @@ func (r *Repository) ConfirmPayment(ctx context.Context, reference string) (Subs
 	return sub, pay, nil
 }
 
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 func (r *Repository) ActiveByUser(ctx context.Context, userID string) (Subscription, Plan, error) {
+	return activeByUser(ctx, r.pool, userID)
+}
+
+func activeByUser(ctx context.Context, db rowQuerier, userID string) (Subscription, Plan, error) {
 	const q = `
 		SELECT s.id, s.user_id, s.plan_id, s.status, s.starts_at, s.ends_at,
 		       p.id, p.code, p.name, p.price_idr, p.duration_days, p.max_memes, p.active
@@ -175,7 +183,7 @@ func (r *Repository) ActiveByUser(ctx context.Context, userID string) (Subscript
 		sub Subscription
 		p   Plan
 	)
-	err := r.pool.QueryRow(ctx, q, userID).Scan(
+	err := db.QueryRow(ctx, q, userID).Scan(
 		&sub.ID, &sub.UserID, &sub.PlanID, &sub.Status, &sub.StartsAt, &sub.EndsAt,
 		&p.ID, &p.Code, &p.Name, &p.PriceIDR, &p.Duration, &p.MaxMemes, &p.Active,
 	)
@@ -203,8 +211,12 @@ func (r *Repository) MarkExpired(ctx context.Context) (int64, error) {
 
 // MemesUsed menghitung meme yang dibuat dalam periode langganan aktif.
 func (r *Repository) MemesUsed(ctx context.Context, userID string, since time.Time) (int32, error) {
+	return memesUsed(ctx, r.pool, userID, since)
+}
+
+func memesUsed(ctx context.Context, db rowQuerier, userID string, since time.Time) (int32, error) {
 	var n int32
-	err := r.pool.QueryRow(ctx,
+	err := db.QueryRow(ctx,
 		`SELECT COUNT(*) FROM memes WHERE user_id = $1 AND created_at >= $2`,
 		userID, since,
 	).Scan(&n)

@@ -2,7 +2,10 @@ package subscription
 
 import (
 	"context"
+	"errors"
+
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"time"
 
 	"github.com/nyxsr/meme-portal/api/internal/platform/token"
@@ -74,10 +77,42 @@ func (s *Service) MarkExpired(ctx context.Context) (int64, error) {
 	return s.repo.MarkExpired(ctx)
 }
 
+// CheckQuota locks the user until the caller commits the pending meme.
+func (s *Service) CheckQuota(ctx context.Context, tx pgx.Tx, userID string) error {
+	var lockedID string
+	if err := tx.QueryRow(ctx, "SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE", userID).Scan(&lockedID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotSubscribed
+		}
+		return err
+	}
+	sub, plan, err := activeByUser(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	if plan.MaxMemes == 0 {
+		return nil
+	}
+	if sub.StartsAt == nil {
+		return ErrNotSubscribed
+	}
+	used, err := memesUsed(ctx, tx, userID, *sub.StartsAt)
+	if err != nil {
+		return err
+	}
+	if used >= plan.MaxMemes {
+		return ErrQuotaExceeded
+	}
+	return nil
+}
+
 func (s *Service) Status(ctx context.Context, userID string) (SubscriptionStatus, error) {
 	sub, plan, err := s.repo.ActiveByUser(ctx, userID)
 	if err == nil {
-		used, err := s.repo.MemesUsed(ctx, userID, time.Now().AddDate(0, 0, -int(plan.Duration)))
+		if sub.StartsAt == nil {
+			return SubscriptionStatus{}, fmt.Errorf("langganan aktif tidak punya tanggal mulai")
+		}
+		used, err := s.repo.MemesUsed(ctx, userID, *sub.StartsAt)
 		if err != nil {
 			return SubscriptionStatus{}, err
 		}
@@ -95,6 +130,9 @@ func (s *Service) Status(ctx context.Context, userID string) (SubscriptionStatus
 			MemesUsed:  used,
 			MaxMemes:   plan.MaxMemes,
 		}, nil
+	}
+	if !errors.Is(err, ErrNotSubscribed) {
+		return SubscriptionStatus{}, err
 	}
 	return SubscriptionStatus{Subscribed: false, MemesUsed: 0, MaxMemes: 0}, nil
 }

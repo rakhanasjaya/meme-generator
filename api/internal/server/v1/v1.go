@@ -4,9 +4,11 @@ package v1
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
@@ -35,6 +37,18 @@ func (g subscriptionGate) CanCreate(ctx context.Context, userID string) error {
 		return meme.ErrQuotaExceeded
 	}
 	return nil
+}
+
+func (g subscriptionGate) Reserve(ctx context.Context, tx pgx.Tx, userID string) error {
+	err := g.sub.CheckQuota(ctx, tx, userID)
+	switch {
+	case errors.Is(err, subscription.ErrNotSubscribed):
+		return meme.ErrNotSubscribedGate
+	case errors.Is(err, subscription.ErrQuotaExceeded):
+		return meme.ErrQuotaExceeded
+	default:
+		return err
+	}
 }
 
 func Mount(mux *http.ServeMux, pool *pgxpool.Pool, rdb *redis.Client, s3Client *s3.Client, tokens *token.Manager, cfg config.Config) {

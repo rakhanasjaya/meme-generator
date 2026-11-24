@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/nyxsr/meme-portal/api/internal/config"
 	"github.com/nyxsr/meme-portal/api/internal/platform/token"
@@ -19,6 +20,7 @@ import (
 // Diimplementasikan oleh modul subscription lewat structural typing.
 type Gate interface {
 	CanCreate(ctx context.Context, userID string) error
+	Reserve(ctx context.Context, tx pgx.Tx, userID string) error
 }
 
 type Service struct {
@@ -40,14 +42,19 @@ func (s *Service) PrepareUpload(ctx context.Context, userID, title, ext string, 
 	if len(data) == 0 || len(data) > maxImageBytes || !allowedExt(ext) || mime.TypeByExtension(ext) != contentType {
 		return UploadResponse{}, ErrInvalidFile
 	}
-	if err := s.gate.CanCreate(ctx, userID); err != nil {
-		return UploadResponse{}, err
-	}
 	objectKey := fmt.Sprintf("base/%s%s", token.RandomHex(12), ext)
-	if err := s.storeImage(ctx, objectKey, contentType, data); err != nil {
-		return UploadResponse{}, err
-	}
-	m, err := s.repo.Create(ctx, Meme{UserID: userID, Title: title, BaseImageURL: s.publicURL(objectKey)})
+	var m Meme
+	err := pgx.BeginFunc(ctx, s.repo.pool, func(tx pgx.Tx) error {
+		if err := s.gate.Reserve(ctx, tx, userID); err != nil {
+			return err
+		}
+		if err := s.storeImage(ctx, objectKey, contentType, data); err != nil {
+			return err
+		}
+		var err error
+		m, err = s.repo.Create(ctx, tx, Meme{UserID: userID, Title: title, BaseImageURL: s.publicURL(objectKey)})
+		return err
+	})
 	if err != nil {
 		return UploadResponse{}, err
 	}
