@@ -33,6 +33,10 @@ func NewStorage(ctx context.Context, cfg cfgpkg.StorageConfig) (*s3.Client, erro
 	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(scheme + "://" + cfg.Endpoint)
 		o.UsePathStyle = true
+		// Garage (S3-compatible) tidak mengenal checksum tambahan bawaan SDK;
+		// tanpa ini presigned PUT URL memuat parameter checksum dan ditolak.
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 		o.HTTPClient = &http.Client{}
 	}), nil
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"path"
 	"strconv"
@@ -21,10 +22,45 @@ func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
 }
 
+// prepareUploadDTO adalah body JSON kontrak upload asli.
+type prepareUploadDTO struct {
+	Title       string `json:"title"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"contentType"`
+	Size        int64  `json:"size"` // opsional; bila diisi, dibatasi dan ditandatangani ke URL
+}
+
+// mediaType mengembalikan media type header Content-Type (kosong bila tidak ada).
+func mediaType(r *http.Request) string {
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil {
+		return ""
+	}
+	return mt
+}
+
+// PrepareUpload mendukung dua bentuk request:
+//   - JSON {title, filename, contentType[, size]} (kontrak asli): membuat meme
+//     pending dan membalas uploadUrl (presigned PUT) untuk gambar dasar.
+//   - Body gambar mentah (Content-Type image/*): API menyimpan gambar sendiri.
 func (h *Handler) PrepareUpload(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.UserIDFromContext(r.Context())
 	if !ok {
 		response.Error(w, http.StatusUnauthorized, response.CodeUnauthorized, "unauthorized")
+		return
+	}
+	if mt := mediaType(r); mt == "" || mt == "application/json" {
+		var dto prepareUploadDTO
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&dto); err != nil {
+			response.Error(w, http.StatusBadRequest, response.CodeInvalidRequestBody, "invalid request body")
+			return
+		}
+		res, err := h.service.PrepareUploadPresigned(r.Context(), userID, dto.Title, path.Ext(dto.Filename), dto.ContentType, dto.Size)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		response.Success(w, http.StatusCreated, CodeUploadPrepared, res, "upload disiapkan")
 		return
 	}
 	data, ok := readImage(w, r)
@@ -44,11 +80,23 @@ type completeDTO struct {
 	ResultURL string `json:"resultUrl"`
 }
 
-// ResultUpload menyimpan gambar hasil render canvas.
+// ResultUpload mendukung dua bentuk request:
+//   - tanpa body gambar (kontrak asli): membalas uploadUrl (presigned PUT)
+//     untuk gambar hasil render.
+//   - body PNG mentah (Content-Type image/png): API menyimpan hasil render sendiri.
 func (h *Handler) ResultUpload(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.UserIDFromContext(r.Context())
 	if !ok {
 		response.Error(w, http.StatusUnauthorized, response.CodeUnauthorized, "unauthorized")
+		return
+	}
+	if mediaType(r) != "image/png" {
+		res, err := h.service.ResultUploadPresigned(r.Context(), userID, r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		response.Success(w, http.StatusOK, CodeUploadPrepared, res, "upload hasil disiapkan")
 		return
 	}
 	data, ok := readImage(w, r)

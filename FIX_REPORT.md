@@ -21,7 +21,7 @@ Beberapa tiket ternyata berasal dari akar masalah yang sama, sehingga dikerjakan
 | **105** | Checkout pending ganda | Tidak ada pencegahan klik ganda maupun request ganda | Idempotency key, tombol nonaktif, dan pemakaian ulang checkout pending |
 | **106** | Klik bayar tidak ada respons | Tidak ada status progres, gagal, maupun sukses di UI | Tampilan progres, pesan gagal dengan coba lagi, dan konfirmasi sukses |
 | **107** | Bisa melihat dan menghapus meme user lain | Meme diambil hanya berdasarkan ID, tanpa memeriksa pemilik | Query memeriksa ID dan pemilik, 404 untuk meme milik orang lain, hapus memakai `deleted_at` |
-| **108** | Ada file asing (installer GTA V) di S3 | Jalur upload tidak membatasi ukuran dan jenis file | Upload lewat API dengan batas 10 MiB dan validasi signature MIME |
+| **108** | Ada file asing (installer GTA V) di S3 | Jalur upload tidak membatasi ukuran dan jenis file | Validasi ekstensi, content type, dan ukuran di jalur upload; kontrak upload asli (presigned URL) tetap berjalan |
 | **Bonus** | Pesan error kuota habis dan langganan kedaluwarsa sama persis | Kuota habis dianggap sama dengan "belum berlangganan" | Error khusus kuota habis dengan kode `20006` dan pesan sendiri |
 
 ---
@@ -186,11 +186,20 @@ Dampaknya melampaui masalah kapasitas. File besar membengkakkan biaya storage, f
 
 | Tiket | Akar masalah | Perbaikan |
 |---|---|---|
-| **108** | Upload tidak divalidasi (ukuran, jenis, dan ekstensi). | Upload gambar dasar dan hasil sekarang lewat API. Server membatasi tiap gambar hingga **10 MiB**, memeriksa signature MIME, mencocokkan ekstensi gambar dasar, dan menerima PNG untuk hasil render. |
+| **108** | Upload tidak divalidasi (ukuran, jenis, dan ekstensi). | Upload tetap memakai kontrak asli (JSON, lalu presigned PUT URL), tetapi sekarang ekstensi dan content type harus gambar yang diizinkan dan saling cocok, ukuran (bila dikirim) dibatasi **10 MiB** dan ikut ditandatangani ke URL, dan objek yang sudah tersimpan diperiksa lagi saat `Complete`. Jalur kirim gambar langsung ke API (body gambar mentah) tetap tersedia dengan validasi signature MIME, ukuran 10 MiB, dan pencocokan ekstensi. |
 
-Perbaikan ini mengubah kontrak upload, jadi API dan frontend perlu diperbarui bersama. File asing yang sudah terlanjur ada di bucket perlu dibersihkan secara terpisah.
+**Perbaikan susulan: alur dasar sempat rusak.** Versi pertama perbaikan ini mengganti kontrak upload menjadi body gambar mentah. Pengujian alur dasar (register, login, checkout, upload) kemudian menunjukkan semuanya berjalan kecuali upload, yang ditolak dengan status 400 "file gambar tidak valid". Penyebabnya, klien yang memakai kontrak asli mengirim JSON (`title`, `filename`, `contentType`) dan menunggu `uploadUrl` presigned, sedangkan kode baru menganggap isi request itu sebuah gambar dan menolaknya. Ini pelajaran penting: perbaikan keamanan tidak boleh mengubah kontrak yang sudah dipakai klien tanpa alasan kuat.
 
-**Pembuktian.** Upload file di atas 10 MiB, file dengan signature bukan gambar, dan file dengan ekstensi yang tidak cocok sekarang ditolak oleh server. Upload gambar normal dan render PNG tetap berhasil.
+Karena itu kontrak asli saya pulihkan sebagai jalur utama, dengan validasi TKT-108 dipindahkan ke dalamnya:
+
+- **Kontrak asli (JSON):** `POST /memes/upload` menerima `title`, `filename`, `contentType`, dan `size` yang opsional. Ekstensi harus `.jpg`, `.jpeg`, `.png`, `.gif`, atau `.webp`, dan content type harus cocok dengan ekstensi itu (kosong berarti diturunkan dari ekstensi). Bila `size` dikirim, nilainya dibatasi 10 MiB dan ikut ditandatangani ke presigned URL, jadi S3 menolak file dengan ukuran lain. `POST /memes/{id}/result-upload` tanpa body gambar mengembalikan presigned URL untuk PNG hasil render.
+- **Pemeriksaan saat `Complete`:** karena presigned PUT tidak bisa dibatasi ukurannya bila klien tidak mengirim `size`, objek yang sudah tersimpan diperiksa (ukuran dan content type). Objek yang melanggar dihapus dan meme ditolak.
+- **Jalur body gambar mentah:** tetap tersedia dan dipilih otomatis bila `Content-Type` request berupa gambar (frontend memakai jalur ini, sehingga tidak bergantung pada CORS bucket).
+- **Klien S3:** perhitungan checksum tambahan bawaan SDK dimatikan (`WhenRequired`) agar presigned URL kompatibel dengan Garage.
+
+File asing yang sudah terlanjur ada di bucket tetap perlu dibersihkan secara terpisah.
+
+**Pembuktian.** Permintaan upload dengan nama file `.zip`, `.exe`, atau `.html`, atau dengan content type yang tidak cocok dengan ekstensi, ditolak dengan status 400. Permintaan dengan `size` di atas 10 MiB juga ditolak. Alur normal (JSON, PUT ke `uploadUrl`, `result-upload`, `complete`) dan alur body gambar mentah dari frontend sama-sama berhasil.
 
 ---
 
