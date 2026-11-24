@@ -31,9 +31,9 @@ export function useSubscriptionStatus() {
     queryKey: queryKeys.subscription,
     queryFn: async () =>
       unwrap<SubscriptionStatus>(await api.get("/api/v1/subscription/status")),
-    // BUG: status dianggap abadi — setelah beli/expired, UI tidak pernah
-    // mengambil ulang sampai invalidate manual / reload penuh.
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchInterval: 30_000,
   });
 }
 
@@ -80,6 +80,7 @@ export function useMemes(limit = 20, offset = 0) {
 }
 
 export function usePrepareUpload() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ title, file }: { title: string; file: File }) =>
       unwrap<UploadResponse>(
@@ -88,6 +89,7 @@ export function usePrepareUpload() {
           headers: { "Content-Type": file.type || "application/octet-stream" },
         }),
       ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.subscription }),
   });
 }
 
