@@ -1,8 +1,11 @@
 package meme
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"mime"
+	"net/http"
 	"path"
 	"strings"
 
@@ -30,61 +33,55 @@ func NewService(repo *Repository, s3Client *s3.Client, cfg config.StorageConfig,
 	return &Service{repo: repo, s3: s3Client, bucket: cfg.Bucket, baseURL: cfg.PublicBaseURL, gate: gate}
 }
 
-// PrepareUpload membuat record meme (pending) dan mengembalikan presigned PUT URL
-// untuk mengunggah gambar dasar langsung ke S3/Garage.
-func (s *Service) PrepareUpload(ctx context.Context, userID, title, ext, contentType string) (UploadResponse, error) {
+// PrepareUpload stores the validated base image and creates its pending meme.
+func (s *Service) PrepareUpload(ctx context.Context, userID, title, ext string, data []byte) (UploadResponse, error) {
+	ext = strings.ToLower(ext)
+	contentType := http.DetectContentType(data)
+	if len(data) == 0 || len(data) > maxImageBytes || !allowedExt(ext) || mime.TypeByExtension(ext) != contentType {
+		return UploadResponse{}, ErrInvalidFile
+	}
 	if err := s.gate.CanCreate(ctx, userID); err != nil {
 		return UploadResponse{}, err
 	}
-	// BUG: tidak ada allowlist ekstensi dan tidak ada batas ukuran file.
-	// Semua tipe file lolos (pdf, zip, html, exe) dan presigned PUT tanpa
-	// Content-Length berarti ukurannya tak terbatas. Fix: validasi ext
-	// (allowedExt) + batas ukuran di presign/handler.
-	objectKey := fmt.Sprintf("base/%s%s", token.RandomHex(12), strings.ToLower(ext))
-
-	m, err := s.repo.Create(ctx, Meme{
-		UserID: userID, Title: title,
-		BaseImageURL: s.publicURL(objectKey),
-	})
+	objectKey := fmt.Sprintf("base/%s%s", token.RandomHex(12), ext)
+	if err := s.storeImage(ctx, objectKey, contentType, data); err != nil {
+		return UploadResponse{}, err
+	}
+	m, err := s.repo.Create(ctx, Meme{UserID: userID, Title: title, BaseImageURL: s.publicURL(objectKey)})
 	if err != nil {
 		return UploadResponse{}, err
 	}
-
-	presign := s3.NewPresignClient(s.s3)
-	input := &s3.PutObjectInput{Bucket: &s.bucket, Key: &objectKey}
-	// ContentType diambil mentah dari klien tanpa validasi allowlist —
-	// klien bisa memilih text/html dsb.
-	if contentType != "" {
-		input.ContentType = &contentType
-	}
-	req, err := presign.PresignPutObject(ctx, input, s3.WithPresignExpires(maxPresignTTL))
-	if err != nil {
-		return UploadResponse{}, fmt.Errorf("meme service: presign gagal: %w", err)
-	}
-	return UploadResponse{ID: m.ID, UploadURL: req.URL, BaseURL: m.BaseImageURL}, nil
+	return UploadResponse{ID: m.ID, BaseURL: m.BaseImageURL}, nil
 }
 
-// ResultUpload mengembalikan presigned PUT URL untuk gambar hasil render
-// (canvas) milik meme <id>; complete kemudian menyimpan URL publiknya.
-func (s *Service) ResultUpload(ctx context.Context, userID, id string) (UploadResponse, error) {
+func (s *Service) ResultUpload(ctx context.Context, userID, id string, data []byte) (UploadResponse, error) {
+	m, err := s.repo.GetByID(ctx, id, userID)
+	if err != nil {
+		return UploadResponse{}, err
+	}
 	if err := s.gate.CanCreate(ctx, userID); err != nil {
 		return UploadResponse{}, err
 	}
-	if _, err := s.repo.GetByID(ctx, id, userID); err != nil {
+	if len(data) == 0 || len(data) > maxImageBytes || http.DetectContentType(data) != "image/png" {
+		return UploadResponse{}, ErrInvalidFile
+	}
+	objectKey := resultKey(m.ID)
+	if err := s.storeImage(ctx, objectKey, "image/png", data); err != nil {
 		return UploadResponse{}, err
 	}
-	objectKey := resultKey(id)
+	return UploadResponse{ID: m.ID, BaseURL: s.publicURL(objectKey)}, nil
+}
 
-	presign := s3.NewPresignClient(s.s3)
-	req, err := presign.PresignPutObject(ctx, &s3.PutObjectInput{
-		Bucket:      &s.bucket,
-		Key:         &objectKey,
-		ContentType: &[]string{"image/png"}[0],
-	}, s3.WithPresignExpires(maxPresignTTL))
+func (s *Service) storeImage(ctx context.Context, key, contentType string, data []byte) error {
+	size := int64(len(data))
+	_, err := s.s3.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: &s.bucket, Key: &key, ContentType: &contentType,
+		ContentLength: &size, Body: bytes.NewReader(data),
+	})
 	if err != nil {
-		return UploadResponse{}, fmt.Errorf("meme service: presign gagal: %w", err)
+		return fmt.Errorf("meme service: simpan gambar: %w", err)
 	}
-	return UploadResponse{ID: id, UploadURL: req.URL, BaseURL: s.publicURL(objectKey)}, nil
+	return nil
 }
 
 func (s *Service) Complete(ctx context.Context, userID, id, resultURL string) (Meme, error) {

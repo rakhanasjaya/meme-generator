@@ -1,8 +1,6 @@
 package meme
 
-import "time"
-
-const maxPresignTTL = 15 * time.Minute
+const maxImageBytes = 10 << 20
 
 const (
 	defaultLimit = 20

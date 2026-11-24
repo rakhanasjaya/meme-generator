@@ -18,11 +18,7 @@ import {
 } from "@/lib/queries";
 
 // Alur render:
-// 1. prepare upload → presigned PUT untuk gambar dasar
-// 2. PUT gambar dasar langsung ke Garage (S3)
-// 3. render canvas: gambar dasar + teks atas/bawah font Impact
-// 4. presign via result-upload → PUT hasil PNG
-// 5. complete → simpan URL hasil ke database
+// Unggah gambar dasar dan hasil render melalui API, lalu simpan URL hasil.
 
 const FONT_STACK = "Impact, 'Arial Narrow Bold', sans-serif";
 
@@ -101,17 +97,7 @@ function drawMeme(
   }
 }
 
-async function putToS3(uploadUrl: string, blob: Blob) {
-  const res = await fetch(uploadUrl, {
-    method: "PUT",
-    body: blob,
-    headers: { "Content-Type": blob.type },
-  });
-  if (!res.ok) throw new Error(`upload ke S3 gagal: ${res.status}`);
-}
-
 interface ResultUploadData {
-  uploadUrl: string;
   baseUrl: string;
 }
 
@@ -164,10 +150,8 @@ export default function StudioPage() {
       });
       imgRef.current = img;
 
-      // 1) presign gambar dasar
-      const prepared = await prepare.mutateAsync({ title, filename: file.name });
-      // 2) unggah gambar dasar ke Garage
-      await putToS3(prepared.uploadUrl, file);
+      // Unggah gambar dasar
+      const prepared = await prepare.mutateAsync({ title, file });
 
       // 3) render hasil ke PNG
       const resultCanvas = document.createElement("canvas");
@@ -179,11 +163,12 @@ export default function StudioPage() {
         ),
       );
 
-      // 4) presign + unggah hasil
+      // Unggah hasil render
       const result = unwrap<ResultUploadData>(
-        await api.post(`/api/v1/memes/${prepared.id}/result-upload`),
+        await api.post(`/api/v1/memes/${prepared.id}/result-upload`, blob, {
+          headers: { "Content-Type": "image/png" },
+        }),
       );
-      await putToS3(result.uploadUrl, blob);
 
       // 5) complete
       await complete.mutateAsync({ id: prepared.id, resultUrl: result.baseUrl });

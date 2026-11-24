@@ -81,9 +81,12 @@ export function useMemes(limit = 20, offset = 0) {
 
 export function usePrepareUpload() {
   return useMutation({
-    mutationFn: async (input: { title: string; filename: string }) =>
+    mutationFn: async ({ title, file }: { title: string; file: File }) =>
       unwrap<UploadResponse>(
-        await api.post("/api/v1/memes/upload", input),
+        await api.post("/api/v1/memes/upload", file, {
+          params: { title, filename: file.name },
+          headers: { "Content-Type": file.type || "application/octet-stream" },
+        }),
       ),
   });
 }
