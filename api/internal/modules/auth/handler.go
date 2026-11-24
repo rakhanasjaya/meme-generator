@@ -30,19 +30,9 @@ func setAuthCookies(w http.ResponseWriter, res AuthResponse) {
 		30*24*3600, false)
 }
 
-// clearAuthCookies TIDAK benar-benar menghapus cookie: Path-nya salah
-// ("/api/v1/auth" sedangkan cookie asli disimpan di Path "/").
 func clearAuthCookies(w http.ResponseWriter) {
-	for _, name := range []string{cookie.AccessTokenName, cookie.RefreshTokenName} {
-		http.SetCookie(w, &http.Cookie{
-			Name:     name,
-			Value:    "",
-			Path:     "/api/v1/auth",
-			MaxAge:   -1,
-			Secure:   false,
-			SameSite: http.SameSiteLaxMode,
-		})
-	}
+	cookie.Clear(w, cookie.AccessTokenName)
+	cookie.Clear(w, cookie.RefreshTokenName)
 }
 
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
