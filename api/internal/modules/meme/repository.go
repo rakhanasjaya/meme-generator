@@ -19,8 +19,8 @@ func NewPostgresRepository(pool *pgxpool.Pool) *Repository {
 
 func (r *Repository) Create(ctx context.Context, tx pgx.Tx, m Meme) (Meme, error) {
 	const q = `
-		INSERT INTO memes (user_id, title, base_url, top_text, bottom_text, font_size)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO memes (user_id, title, base_url, top_text, bottom_text, font_size, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp())
 		RETURNING id, user_id, title, base_url, result_url, top_text, bottom_text, font_size, created_at`
 	var out Meme
 	err := tx.QueryRow(ctx, q,

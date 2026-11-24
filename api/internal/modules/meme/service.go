@@ -19,7 +19,6 @@ import (
 // Gate memeriksa apakah user berhak membuat meme (langganan aktif).
 // Diimplementasikan oleh modul subscription lewat structural typing.
 type Gate interface {
-	CanCreate(ctx context.Context, userID string) error
 	Reserve(ctx context.Context, tx pgx.Tx, userID string) error
 }
 
@@ -66,9 +65,6 @@ func (s *Service) ResultUpload(ctx context.Context, userID, id string, data []by
 	if err != nil {
 		return UploadResponse{}, err
 	}
-	if err := s.gate.CanCreate(ctx, userID); err != nil {
-		return UploadResponse{}, err
-	}
 	if len(data) == 0 || len(data) > maxImageBytes || http.DetectContentType(data) != "image/png" {
 		return UploadResponse{}, ErrInvalidFile
 	}
@@ -92,9 +88,6 @@ func (s *Service) storeImage(ctx context.Context, key, contentType string, data 
 }
 
 func (s *Service) Complete(ctx context.Context, userID, id, resultURL string) (Meme, error) {
-	if err := s.gate.CanCreate(ctx, userID); err != nil {
-		return Meme{}, err
-	}
 	meme, err := s.repo.GetByID(ctx, id, userID)
 	if err != nil {
 		return Meme{}, err

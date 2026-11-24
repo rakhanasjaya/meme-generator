@@ -25,20 +25,6 @@ type subscriptionGate struct {
 	sub *subscription.Service
 }
 
-func (g subscriptionGate) CanCreate(ctx context.Context, userID string) error {
-	status, err := g.sub.Status(ctx, userID)
-	if err != nil {
-		return err
-	}
-	if !status.Subscribed {
-		return meme.ErrNotSubscribedGate
-	}
-	if status.MaxMemes > 0 && status.MemesUsed >= status.MaxMemes {
-		return meme.ErrQuotaExceeded
-	}
-	return nil
-}
-
 func (g subscriptionGate) Reserve(ctx context.Context, tx pgx.Tx, userID string) error {
 	err := g.sub.CheckQuota(ctx, tx, userID)
 	switch {

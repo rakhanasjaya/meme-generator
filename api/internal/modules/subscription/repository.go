@@ -177,7 +177,7 @@ func activeByUser(ctx context.Context, db rowQuerier, userID string) (Subscripti
 		       p.id, p.code, p.name, p.price_idr, p.duration_days, p.max_memes, p.active
 		FROM subscriptions s
 		JOIN plans p ON p.id = s.plan_id
-		WHERE s.user_id = $1 AND s.status = 'active' AND s.ends_at >= now()
+		WHERE s.user_id = $1 AND s.status = 'active' AND s.ends_at > clock_timestamp()
 		ORDER BY s.ends_at DESC LIMIT 1`
 	var (
 		sub Subscription
