@@ -21,7 +21,11 @@ type PaymentGateway interface {
 type MockGateway struct{}
 
 func (MockGateway) CreateCharge(_ context.Context, _ int64, reference string) (string, error) {
-	return "/api/v1/subscription/payments/" + reference + "/confirm", nil
+	return mockConfirmURL(reference), nil
+}
+
+func mockConfirmURL(reference string) string {
+	return "/api/v1/subscription/payments/" + reference + "/confirm"
 }
 
 type Service struct {
@@ -40,24 +44,17 @@ func (s *Service) ListPlans(ctx context.Context) ([]Plan, error) {
 // Checkout membuat checkout baru; jika idempotencyKey pernah dipakai,
 // checkout yang sama dikembalikan (replay) tanpa membuat baris baru.
 func (s *Service) Checkout(ctx context.Context, userID string, dto CheckoutDTO, idempotencyKey string) (CheckoutResponse, error) {
-	if prev, ok, err := s.repo.CheckoutByIdempotencyKey(ctx, idempotencyKey); err != nil {
-		return CheckoutResponse{}, err
-	} else if ok {
-		return prev, nil
-	}
-
 	plan, err := s.repo.GetPlanByCode(ctx, dto.PlanCode)
 	if err != nil {
 		return CheckoutResponse{}, err
 	}
-	if _, _, err := s.repo.ActiveByUser(ctx, userID); err == nil {
-		return CheckoutResponse{}, ErrAlreadySubscribed
-	}
-
 	reference := token.RandomHex(12)
-	sub, pay, err := s.repo.CreateSubscription(ctx, userID, plan, reference, idempotencyKey)
+	sub, pay, created, err := s.repo.CreateSubscription(ctx, userID, plan, reference, idempotencyKey)
 	if err != nil {
 		return CheckoutResponse{}, err
+	}
+	if !created {
+		return CheckoutResponse{Subscription: sub, Payment: pay, MockGatewayURL: mockConfirmURL(pay.Reference)}, nil
 	}
 	url, err := s.gateway.CreateCharge(ctx, pay.AmountIDR, reference)
 	if err != nil {

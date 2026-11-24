@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"time"
@@ -54,15 +55,30 @@ func (r *Repository) GetPlanByCode(ctx context.Context, code string) (Plan, erro
 	return p, nil
 }
 
-// CreateSubscription membuat langganan pending + pembayaran pending dalam satu transaksi.
-// idempotencyKey disimpan di payments: replay dengan key sama mengembalikan
-// payment yang sama (unique index sebagai safety net).
-func (r *Repository) CreateSubscription(ctx context.Context, userID string, p Plan, reference, idempotencyKey string) (Subscription, Payment, error) {
+// CreateSubscription serializes checkout creation and reuses an existing checkout.
+func (r *Repository) CreateSubscription(ctx context.Context, userID string, p Plan, reference, idempotencyKey string) (Subscription, Payment, bool, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return Subscription{}, Payment{}, err
+		return Subscription{}, Payment{}, false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	var lockedID string
+	if err := tx.QueryRow(ctx, "SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE", userID).Scan(&lockedID); err != nil {
+		return Subscription{}, Payment{}, false, err
+	}
+	scopedKey := fmt.Sprintf("%x", sha256.Sum256([]byte(userID+":"+idempotencyKey)))
+	if previous, ok, err := findCheckout(ctx, tx, userID, p.ID, scopedKey, idempotencyKey); err != nil {
+		return Subscription{}, Payment{}, false, err
+	} else if ok {
+		return previous.Subscription, previous.Payment, false, nil
+	}
+	if _, _, err := activeByUser(ctx, tx, userID); !errors.Is(err, ErrNotSubscribed) {
+		if err == nil {
+			err = ErrAlreadySubscribed
+		}
+		return Subscription{}, Payment{}, false, err
+	}
 
 	var sub Subscription
 	err = tx.QueryRow(ctx, `
@@ -72,7 +88,7 @@ func (r *Repository) CreateSubscription(ctx context.Context, userID string, p Pl
 		userID, p.ID,
 	).Scan(&sub.ID, &sub.UserID, &sub.PlanID, &sub.Status, &sub.StartsAt, &sub.EndsAt)
 	if err != nil {
-		return Subscription{}, Payment{}, fmt.Errorf("subscription repository: create subscription gagal: %w", err)
+		return Subscription{}, Payment{}, false, fmt.Errorf("subscription repository: create subscription gagal: %w", err)
 	}
 
 	var pay Payment
@@ -80,31 +96,34 @@ func (r *Repository) CreateSubscription(ctx context.Context, userID string, p Pl
 		INSERT INTO payments (subscription_id, amount_idr, status, reference, idempotency_key)
 		VALUES ($1, $2, 'pending', $3, $4)
 		RETURNING id, subscription_id, amount_idr, status, reference`,
-		sub.ID, p.PriceIDR, reference, idempotencyKey,
+		sub.ID, p.PriceIDR, reference, scopedKey,
 	).Scan(&pay.ID, &pay.SubscriptionID, &pay.AmountIDR, &pay.Status, &pay.Reference)
 	if err != nil {
-		return Subscription{}, Payment{}, fmt.Errorf("subscription repository: create payment gagal: %w", err)
+		return Subscription{}, Payment{}, false, fmt.Errorf("subscription repository: create payment gagal: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return Subscription{}, Payment{}, err
+		return Subscription{}, Payment{}, false, err
 	}
-	return sub, pay, nil
+	return sub, pay, true, nil
 }
 
-// CheckoutByIdempotencyKey mengembalikan checkout yang sudah ada untuk key
-// yang sama (replay). ok=false berarti belum ada.
-func (r *Repository) CheckoutByIdempotencyKey(ctx context.Context, key string) (CheckoutResponse, bool, error) {
+func findCheckout(ctx context.Context, tx pgx.Tx, userID, planID, scopedKey, legacyKey string) (CheckoutResponse, bool, error) {
 	const q = `
 		SELECT s.id, s.user_id, s.plan_id, s.status, s.starts_at, s.ends_at,
 		       p.id, p.subscription_id, p.amount_idr, p.status, p.reference
 		FROM payments p
 		JOIN subscriptions s ON s.id = p.subscription_id
-		WHERE p.idempotency_key = $1`
+		WHERE s.user_id = $1 AND (
+			p.idempotency_key IN ($3, $4) OR
+			(s.plan_id = $2 AND s.status = 'pending' AND p.status = 'pending')
+		)
+		ORDER BY (p.idempotency_key IN ($3, $4)) DESC NULLS LAST, p.created_at DESC, p.id
+		LIMIT 1`
 	var (
 		res CheckoutResponse
 	)
-	err := r.pool.QueryRow(ctx, q, key).Scan(
+	err := tx.QueryRow(ctx, q, userID, planID, scopedKey, legacyKey).Scan(
 		&res.Subscription.ID, &res.Subscription.UserID, &res.Subscription.PlanID,
 		&res.Subscription.Status, &res.Subscription.StartsAt, &res.Subscription.EndsAt,
 		&res.Payment.ID, &res.Payment.SubscriptionID, &res.Payment.AmountIDR,
@@ -116,7 +135,6 @@ func (r *Repository) CheckoutByIdempotencyKey(ctx context.Context, key string) (
 	if err != nil {
 		return CheckoutResponse{}, false, fmt.Errorf("subscription repository: lookup idempotency gagal: %w", err)
 	}
-	res.MockGatewayURL = "/api/v1/subscription/payments/" + res.Payment.Reference + "/confirm"
 	return res, true, nil
 }
 

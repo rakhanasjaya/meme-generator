@@ -63,6 +63,7 @@ export default function PricingPage() {
               </p>
               <Button
                 className="w-full"
+                disabled={checkout.isPending}
                 onClick={() =>
                   checkout.mutate(plan.code, {
                     onSuccess: (res) =>
