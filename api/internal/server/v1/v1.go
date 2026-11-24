@@ -32,7 +32,7 @@ func (g subscriptionGate) CanCreate(ctx context.Context, userID string) error {
 		return meme.ErrNotSubscribedGate
 	}
 	if status.MaxMemes > 0 && status.MemesUsed >= status.MaxMemes {
-		return meme.ErrNotSubscribedGate
+		return meme.ErrQuotaExceeded
 	}
 	return nil
 }

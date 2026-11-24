@@ -124,6 +124,8 @@ func writeError(w http.ResponseWriter, err error) {
 		response.Error(w, http.StatusNotFound, response.CodeMemeNotFound, err.Error())
 	case errors.Is(err, ErrNotSubscribedGate):
 		response.Error(w, http.StatusForbidden, response.CodeNotSubscribed, ErrNotSubscribedGate.Error())
+	case errors.Is(err, ErrQuotaExceeded):
+		response.Error(w, http.StatusForbidden, response.CodeQuotaExceeded, ErrQuotaExceeded.Error())
 	default:
 		slog.Error("meme handler: internal error", "err", err)
 		response.Error(w, http.StatusInternalServerError, response.CodeInternalServer, "internal server error")

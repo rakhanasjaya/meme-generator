@@ -14,7 +14,7 @@ export function describeError(err: unknown): string {
     const label: Record<number, string> = {
       400: "Permintaan tidak valid",
       401: "Sesi habis / belum login",
-      403: "Tidak diizinkan (subscription tidak aktif?)",
+      403: "Tidak diizinkan",
       404: "Resource tidak ditemukan",
       405: "Endpoint/method tidak didukung server",
       409: "Konflik data",

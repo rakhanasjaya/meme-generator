@@ -13,6 +13,7 @@ type Meme struct {
 	BottomText   string    `json:"bottomText"`
 	FontSize     int32     `json:"fontSize"`
 	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 type UploadResponse struct {

@@ -20,6 +20,7 @@ const (
 	CodePaymentFailed     = 20003
 	CodePlanNotFound      = 20004
 	CodeAlreadySubscribed = 20005
+	CodeQuotaExceeded      = 20006
 
 	CodeMemeNotFound   = 30001
 	CodeInvalidImage   = 30002
