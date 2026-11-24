@@ -73,7 +73,7 @@ func (s *Service) ResultUpload(ctx context.Context, userID, id string) (UploadRe
 	if _, err := s.repo.GetByID(ctx, id, userID); err != nil {
 		return UploadResponse{}, err
 	}
-	objectKey := fmt.Sprintf("result/%s.png", id)
+	objectKey := resultKey(id)
 
 	presign := s3.NewPresignClient(s.s3)
 	req, err := presign.PresignPutObject(ctx, &s3.PutObjectInput{
@@ -91,7 +91,19 @@ func (s *Service) Complete(ctx context.Context, userID, id, resultURL string) (M
 	if err := s.gate.CanCreate(ctx, userID); err != nil {
 		return Meme{}, err
 	}
-	return s.repo.SetResultURL(ctx, id, userID, resultURL)
+	meme, err := s.repo.GetByID(ctx, id, userID)
+	if err != nil {
+		return Meme{}, err
+	}
+	expected := s.publicURL(resultKey(meme.ID))
+	if resultURL != expected {
+		return Meme{}, ErrInvalidResultURL
+	}
+	return s.repo.SetResultURL(ctx, meme.ID, userID, expected)
+}
+
+func resultKey(id string) string {
+	return fmt.Sprintf("result/%s.png", id)
 }
 
 func (s *Service) List(ctx context.Context, userID string, limit, offset int32) (ListResponse, error) {

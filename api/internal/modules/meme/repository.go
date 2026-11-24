@@ -36,7 +36,7 @@ func (r *Repository) Create(ctx context.Context, m Meme) (Meme, error) {
 func (r *Repository) GetByID(ctx context.Context, id, userID string) (Meme, error) {
 	row := r.pool.QueryRow(ctx,
 		`SELECT id, user_id, title, base_url, result_url, top_text, bottom_text, font_size, created_at, updated_at
-		 FROM memes WHERE id = $1`, id)
+		 FROM memes WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`, id, userID)
 	var m Meme
 	err := row.Scan(&m.ID, &m.UserID, &m.Title, &m.BaseImageURL, &m.ResultURL, &m.TopText, &m.BottomText, &m.FontSize, &m.CreatedAt, &m.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -48,10 +48,10 @@ func (r *Repository) GetByID(ctx context.Context, id, userID string) (Meme, erro
 func (r *Repository) SetResultURL(ctx context.Context, id, userID, resultURL string) (Meme, error) {
 	const q = `
 		UPDATE memes SET result_url = $2
-		WHERE id = $1
+		WHERE id = $1 AND user_id = $3 AND deleted_at IS NULL
 		RETURNING id, user_id, title, base_url, result_url, top_text, bottom_text, font_size, created_at`
 	var out Meme
-	err := r.pool.QueryRow(ctx, q, id, resultURL).Scan(
+	err := r.pool.QueryRow(ctx, q, id, resultURL, userID).Scan(
 		&out.ID, &out.UserID, &out.Title, &out.BaseImageURL, &out.ResultURL,
 		&out.TopText, &out.BottomText, &out.FontSize, &out.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -66,12 +66,12 @@ func (r *Repository) SetResultURL(ctx context.Context, id, userID, resultURL str
 func (r *Repository) ListByUser(ctx context.Context, userID string, limit, offset int32) ([]Meme, int64, error) {
 	var total int64
 	if err := r.pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM memes WHERE user_id = $1`, userID).Scan(&total); err != nil {
+		`SELECT COUNT(*) FROM memes WHERE user_id = $1 AND deleted_at IS NULL`, userID).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("meme repository: count gagal: %w", err)
 	}
 	const q = `
 		SELECT id, user_id, title, base_url, result_url, top_text, bottom_text, font_size, created_at
-		FROM memes WHERE user_id = $1
+		FROM memes WHERE user_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at DESC LIMIT $2 OFFSET $3`
 	rows, err := r.pool.Query(ctx, q, userID, limit, offset)
 	if err != nil {
@@ -91,7 +91,7 @@ func (r *Repository) ListByUser(ctx context.Context, userID string, limit, offse
 }
 
 func (r *Repository) Delete(ctx context.Context, id, userID string) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM memes WHERE id = $1`, id)
+	tag, err := r.pool.Exec(ctx, `UPDATE memes SET deleted_at = now() WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`, id, userID)
 	if err != nil {
 		return fmt.Errorf("meme repository: delete gagal: %w", err)
 	}

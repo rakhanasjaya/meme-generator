@@ -118,6 +118,8 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 
 func writeError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, ErrInvalidResultURL):
+		response.Error(w, http.StatusBadRequest, response.CodeInvalidRequestBody, err.Error())
 	case errors.Is(err, ErrInvalidFile):
 		response.Error(w, http.StatusBadRequest, response.CodeInvalidImage, err.Error())
 	case errors.Is(err, ErrNotFound):
